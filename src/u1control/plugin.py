@@ -563,6 +563,35 @@ class U1ControlPage(orca.pages.PagesPluginCapabilityBase):
         if (event == orca.LifecycleEvent.PresetSelected and kind in ("print", "process", "printer")) or (
                 event == getattr(orca.LifecycleEvent, "ProjectOpened", None)):
             self._auto_pipeline()
+        synced = getattr(orca.LifecycleEvent, "FilamentsSynced", None)   # an OrcaSlicer that announces its own sync
+        if synced is not None and event == synced and getattr(ctx, "source", "") == "full":
+            self._refine_orca_sync()
+
+    def _refine_orca_sync(self):
+        """After OrcaSlicer's own "sync filaments from printer" (sidebar button) on a U1: apply each head's
+        Spoolman/Spooler preset and colour on top, as Apply to project filaments does. OrcaSlicer matches by
+        vendor and material only, so a per-spool Spooler preset would otherwise be missed."""
+        try:
+            if on_ui_thread(lambda: selected_u1_preset(orca.host.preset_bundle())) is None:
+                return
+        except Exception as e:
+            log("OrcaSlicer sync follow-up: no printer preset (%r)" % e)
+            return
+        if spooler_keeping_slots():
+            return
+        overrides = migrated_overrides(self._settings())
+
+        def job():
+            try:
+                client = on_ui_thread(_selected_u1)
+                view = u1.summarize(client.query(u1.STATUS_OBJECTS))
+                done, problems = sync_project(view["heads"], view["rfid"], overrides, bound=bound_spool_lookup(_service))
+                self.post_message({"type": "notice", "text": sync_message(done, problems)})
+            except Exception as e:
+                log("OrcaSlicer sync follow-up failed: %r" % e)
+                self.post_message({"type": "notice", "text": tr("Couldn't update the project filaments: %s") % e})
+        if not self._background(job):
+            log("OrcaSlicer sync follow-up skipped: another preset update is running")
 
     def on_load(self):
         # OrcaSlicer calls this when the plugin loads, whether or not the tab is enabled or shown.

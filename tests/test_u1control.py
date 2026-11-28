@@ -689,6 +689,32 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(dict(colours)[2], ["#000000"])   # the spool's black, not the head's white
         self.assertEqual(dict(colours)[4], [heads[3]["colour"]])   # spool without a colour: the head's
 
+    def test_orca_filament_sync_is_refined_with_project_sync(self):
+        # OrcaSlicer's sidebar sync announces FilamentsSynced: on a U1, U1 Control applies its presets and colours
+        # on top; a colour-only sync or another printer is left as OrcaSlicer made it.
+        orca, ns = self.load(preset={"printer_model": "Snapmaker U1", "print_host": self.fake.host},
+                             filament_names=["Generic PETG @U1", "Polymaker PLA @U1", "Generic PLA @U1"])
+        orca.LifecycleEvent.FilamentsSynced = 9
+        colours = []
+        orca.host.preset.filament.set_slot_color = lambda slot, cs, gradient=False: colours.append(slot)
+        page = ns["U1ControlPage"]()
+        page.on_lifecycle_event(9, types.SimpleNamespace(msg="", source="color_only", name="u1"))
+        time.sleep(0.3)
+        self.assertEqual(orca.filament_calls, [])
+        page.on_lifecycle_event(9, types.SimpleNamespace(msg="", source="full", name="u1"))
+        self.assertTrue(wait_for(lambda: any(m.get("type") == "notice" for m in getattr(page, "posted", []))))
+        self.assertEqual([slot for slot, _, _ in orca.filament_calls], [1, 2, 4])
+        self.assertEqual(colours, [1, 2, 4])
+        self.assertIn("Project filaments", [m for m in page.posted if m.get("type") == "notice"][-1]["text"])
+
+        orca, ns = self.load(preset={"printer_model": "Creality K1C", "name": "K1C", "print_host": self.fake.host},
+                             filament_names=["Generic PLA @U1"])
+        orca.LifecycleEvent.FilamentsSynced = 9
+        page = ns["U1ControlPage"]()
+        page.on_lifecycle_event(9, types.SimpleNamespace(msg="", source="full", name="k1c"))
+        time.sleep(0.3)
+        self.assertEqual(orca.filament_calls, [])
+
     def test_sync_project_uses_the_spools_linked_user_preset(self):
         meta = {"My PETG": {"is_user": True}, "Not mine": {}, "Other printer": {"is_user": True, "is_compatible": False},
                 "_local/spooler/Acme PLA @U1": {"is_user": True, "bundle_id": "spooler"}}
